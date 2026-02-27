@@ -1,0 +1,1591 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>EV Wireless Charging Dashboard - Hardware Control</title>
+    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <style>
+        :root {
+            --primary: #2c3e50;
+            --secondary: #34495e;
+            --success: #27ae60;
+            --warning: #f39c12;
+            --danger: #e74c3c;
+            --info: #3498db;
+            --charging-glow: #00ff00;
+            --cooling-glow: #00ffff;
+        }
+
+        body {
+            background: linear-gradient(135deg, #0f2027, #203a43, #2c5364);
+            color: #ecf0f1;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            overflow-x: hidden;
+        }
+
+        .dashboard-card {
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 15px;
+            transition: all 0.5s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+            animation: cardEntrance 0.8s ease-out;
+            position: relative;
+            overflow: hidden;
+            height: 100%;
+        }
+
+        .dashboard-card::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: -100%;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(90deg, transparent, rgba(255,255,255,0.1), transparent);
+            transition: left 0.6s;
+        }
+
+        .dashboard-card:hover::before {
+            left: 100%;
+        }
+
+        .dashboard-card:hover {
+            transform: translateY(-8px) scale(1.02);
+            box-shadow: 0 15px 30px rgba(0, 0, 0, 0.4);
+        }
+
+        @keyframes cardEntrance {
+            from {
+                opacity: 0;
+                transform: translateY(50px) scale(0.9);
+            }
+            to {
+                opacity: 1;
+                transform: translateY(0) scale(1);
+            }
+        }
+
+        .status-indicator {
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 8px;
+            animation: pulse 2s infinite;
+        }
+
+        .status-online { 
+            background: var(--success);
+            box-shadow: 0 0 10px var(--success);
+        }
+        .status-offline { 
+            background: var(--danger);
+            box-shadow: 0 0 10px var(--danger);
+        }
+        .status-warning { 
+            background: var(--warning);
+            box-shadow: 0 0 10px var(--warning);
+        }
+
+        @keyframes pulse {
+            0% { transform: scale(1); opacity: 1; }
+            50% { transform: scale(1.2); opacity: 0.7; }
+            100% { transform: scale(1); opacity: 1; }
+        }
+
+        .sensor-value {
+            font-family: 'Courier New', monospace;
+            font-weight: bold;
+            font-size: 1.2em;
+            transition: all 0.3s ease;
+        }
+
+        .sensor-value.changing {
+            animation: valueChange 0.6s ease;
+        }
+
+        @keyframes valueChange {
+            0% { transform: scale(1); color: inherit; }
+            50% { transform: scale(1.3); color: var(--info); }
+            100% { transform: scale(1); color: inherit; }
+        }
+
+        .progress-thick {
+            height: 25px;
+            border-radius: 12px;
+            overflow: hidden;
+            position: relative;
+        }
+
+        .progress-bar {
+            transition: width 1.5s cubic-bezier(0.34, 1.56, 0.64, 1);
+            position: relative;
+        }
+
+        .progress-bar.charging {
+            animation: chargingGlow 2s infinite alternate;
+        }
+
+        @keyframes chargingGlow {
+            from { box-shadow: 0 0 5px var(--charging-glow); }
+            to { box-shadow: 0 0 20px var(--charging-glow), 0 0 30px var(--charging-glow); }
+        }
+
+        .battery-icon {
+            font-size: 2em;
+            margin-right: 10px;
+            transition: all 0.5s ease;
+        }
+
+        .battery-icon.charging {
+            animation: batteryCharge 1.5s infinite alternate;
+        }
+
+        @keyframes batteryCharge {
+            0% { transform: scale(1); color: #27ae60; }
+            50% { transform: scale(1.1); color: #00ff00; text-shadow: 0 0 10px #00ff00; }
+            100% { transform: scale(1); color: #27ae60; }
+        }
+
+        .state-machine {
+            display: flex;
+            justify-content: space-between;
+            margin: 20px 0;
+            position: relative;
+        }
+
+        .state-step {
+            text-align: center;
+            flex: 1;
+            padding: 15px;
+            border-radius: 15px;
+            background: rgba(255, 255, 255, 0.1);
+            margin: 0 5px;
+            transition: all 0.6s cubic-bezier(0.34, 1.56, 0.64, 1);
+            position: relative;
+            overflow: hidden;
+            cursor: pointer;
+        }
+
+        .state-step::before {
+            content: '';
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: 3px;
+            background: linear-gradient(90deg, var(--success), var(--info));
+            transform: scaleX(0);
+            transition: transform 0.6s ease;
+        }
+
+        .state-step.active {
+            background: var(--success);
+            transform: translateY(-5px) scale(1.05);
+            box-shadow: 0 10px 25px rgba(39, 174, 96, 0.3);
+        }
+
+        .state-step.active::before {
+            transform: scaleX(1);
+        }
+
+        .state-step.warning {
+            background: var(--warning);
+            animation: warningPulse 1.5s infinite;
+        }
+
+        .state-step.danger {
+            background: var(--danger);
+            animation: dangerPulse 1s infinite;
+        }
+
+        @keyframes warningPulse {
+            0%, 100% { box-shadow: 0 0 10px var(--warning); }
+            50% { box-shadow: 0 0 20px var(--warning), 0 0 30px var(--warning); }
+        }
+
+        @keyframes dangerPulse {
+            0%, 100% { box-shadow: 0 0 10px var(--danger); }
+            50% { box-shadow: 0 0 25px var(--danger), 0 0 40px var(--danger); }
+        }
+
+        .metric-card {
+            text-align: center;
+            padding: 15px;
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.05);
+            margin-bottom: 10px;
+            transition: all 0.4s ease;
+            animation: metricPopIn 0.6s ease-out;
+        }
+
+        @keyframes metricPopIn {
+            from {
+                opacity: 0;
+                transform: scale(0.8) rotateX(-90deg);
+            }
+            to {
+                opacity: 1;
+                transform: scale(1) rotateX(0);
+            }
+        }
+
+        .metric-card:hover {
+            transform: scale(1.05);
+            background: rgba(255, 255, 255, 0.1);
+        }
+
+        .metric-value {
+            font-size: 1.8em;
+            font-weight: bold;
+            margin: 5px 0;
+            transition: all 0.3s ease;
+        }
+
+        .metric-label {
+            font-size: 0.9em;
+            opacity: 0.8;
+        }
+
+        .chart-container {
+            position: relative;
+            height: 120px;
+            margin: 15px 0;
+            opacity: 0;
+            animation: fadeInUp 1s ease-out 0.5s forwards;
+        }
+
+        @keyframes fadeInUp {
+            to {
+                opacity: 1;
+                transform: translateY(0);
+            }
+        }
+
+        .control-btn {
+            width: 100%;
+            margin: 5px 0;
+            border: none;
+            border-radius: 8px;
+            padding: 12px;
+            font-weight: bold;
+            transition: all 0.4s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+            position: relative;
+            overflow: hidden;
+        }
+
+        .control-btn::before {
+            content: '';
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            width: 0;
+            height: 0;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 50%;
+            transition: all 0.6s ease;
+            transform: translate(-50%, -50%);
+        }
+
+        .control-btn:hover::before {
+            width: 300px;
+            height: 300px;
+        }
+
+        .control-btn:hover {
+            transform: translateY(-3px) scale(1.05);
+            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.3);
+        }
+
+        .control-btn:active {
+            transform: translateY(0) scale(0.95);
+        }
+
+        .notification {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 15px 20px;
+            border-radius: 10px;
+            background: var(--primary);
+            border-left: 5px solid var(--success);
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+            z-index: 1000;
+            transform: translateX(400px) rotate(10deg);
+            transition: all 0.6s cubic-bezier(0.68, -0.55, 0.265, 1.55);
+            max-width: 300px;
+        }
+
+        .notification.show {
+            transform: translateX(0) rotate(0);
+        }
+
+        .notification.warning {
+            border-left-color: var(--warning);
+        }
+
+        .notification.danger {
+            border-left-color: var(--danger);
+            animation: shake 0.5s ease;
+        }
+
+        @keyframes shake {
+            0%, 100% { transform: translateX(0) rotate(0); }
+            25% { transform: translateX(-10px) rotate(-5deg); }
+            75% { transform: translateX(10px) rotate(5deg); }
+        }
+
+        .vehicle-animation {
+            position: relative;
+            height: 60px;
+            margin: 10px 0;
+        }
+
+        .car-icon {
+            font-size: 2em;
+            position: absolute;
+            left: -50px;
+            transition: left 3s ease-in-out;
+            animation: carDrive 3s infinite;
+        }
+
+        @keyframes carDrive {
+            0% { left: -50px; transform: scaleX(1); }
+            45% { left: 50%; transform: scaleX(1); }
+            50% { transform: scaleX(-1); }
+            95% { left: calc(100% + 50px); transform: scaleX(-1); }
+            100% { left: -50px; transform: scaleX(1); }
+        }
+
+        .temperature-gauge {
+            width: 100px;
+            height: 100px;
+            position: relative;
+            margin: 0 auto;
+        }
+
+        .gauge-fill {
+            position: absolute;
+            width: 100%;
+            height: 100%;
+            border-radius: 50%;
+            background: conic-gradient(from 0deg, #27ae60 0%, #f39c12 50%, #e74c3c 100%);
+            mask: radial-gradient(transparent 50%, #000 51%);
+            transition: transform 1s ease;
+        }
+
+        .cooling-active {
+            animation: coolingSpin 2s linear infinite;
+        }
+
+        @keyframes coolingSpin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+
+        .floating {
+            animation: floating 3s ease-in-out infinite;
+        }
+
+        @keyframes floating {
+            0%, 100% { transform: translateY(0); }
+            50% { transform: translateY(-10px); }
+        }
+
+        .typewriter {
+            overflow: hidden;
+            border-right: 2px solid #fff;
+            white-space: nowrap;
+            animation: typing 3.5s steps(40, end), blink-caret 0.75s step-end infinite;
+        }
+
+        @keyframes typing {
+            from { width: 0 }
+            to { width: 100% }
+        }
+
+        @keyframes blink-caret {
+            from, to { border-color: transparent }
+            50% { border-color: #fff }
+        }
+
+        .particle {
+            position: absolute;
+            width: 4px;
+            height: 4px;
+            background: #fff;
+            border-radius: 50%;
+            pointer-events: none;
+            opacity: 0;
+        }
+
+        @keyframes particleFloat {
+            0% {
+                transform: translateY(0) translateX(0);
+                opacity: 1;
+            }
+            100% {
+                transform: translateY(-100px) translateX(var(--tx, 0));
+                opacity: 0;
+            }
+        }
+
+        /* Even layout fixes */
+        .row-equal {
+            display: flex;
+            flex-wrap: wrap;
+        }
+        
+        .row-equal > [class*='col-'] {
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .card-equal-height {
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .card-content {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+        }
+        
+        .system-status-grid {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 12px;
+            margin-top: 15px;
+        }
+        
+        .status-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 0;
+            border-bottom: 1px solid rgba(255,255,255,0.1);
+        }
+        
+        .status-item:last-child {
+            border-bottom: none;
+        }
+
+        /* Temperature specific styles */
+        .temperature-display {
+            text-align: center;
+            margin: 10px 0;
+        }
+
+        .temp-normal { color: #27ae60; }
+        .temp-warning { color: #f39c12; }
+        .temp-danger { color: #e74c3c; }
+
+        .temperature-value {
+            font-size: 1.5em;
+            font-weight: bold;
+            margin: 5px 0;
+        }
+
+        /* Session history styling */
+        .session-item {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+            padding: 10px;
+            margin-bottom: 8px;
+            border-left: 3px solid var(--info);
+        }
+
+        /* Vehicle selection styles */
+        .vehicle-selection {
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+            padding: 10px;
+            margin-bottom: 15px;
+        }
+
+        /* Vehicle count icon styles */
+        .vehicle-count-icon {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 8px;
+            margin-top: 10px;
+            padding: 8px;
+            background: rgba(255, 255, 255, 0.05);
+            border-radius: 8px;
+        }
+
+        .vehicle-count-icon i {
+            font-size: 1.2em;
+            color: #f39c12;
+        }
+
+        .vehicle-count-number {
+            font-size: 1.3em;
+            font-weight: bold;
+            color: #f39c12;
+        }
+
+        /* Analytics icon positioning */
+        .analytics-metrics {
+            margin-top: -10px;
+        }
+
+        /* Charging Analytics specific styling */
+        .charging-analytics-card {
+            background: rgba(255, 255, 255, 0.12);
+            border: 1px solid rgba(255, 255, 255, 0.3);
+        }
+        
+        .charging-analytics-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 15px;
+        }
+        
+        .analytics-values {
+            display: flex;
+            justify-content: space-between;
+            margin-top: 15px;
+        }
+        
+        .analytics-value-item {
+            text-align: center;
+            flex: 1;
+            padding: 10px;
+        }
+        
+        .analytics-value {
+            font-size: 1.8em;
+            font-weight: bold;
+            color: #f39c12;
+        }
+        
+        .analytics-label {
+            font-size: 0.85em;
+            opacity: 0.8;
+            margin-top: 5px;
+        }
+
+        /* Responsive adjustments */
+        @media (max-width: 768px) {
+            .state-machine {
+                flex-direction: column;
+                gap: 10px;
+            }
+            
+            .state-step {
+                margin: 5px 0;
+            }
+            
+            .system-status-grid {
+                grid-template-columns: 1fr;
+            }
+            
+            .temperature-gauge {
+                width: 80px;
+                height: 80px;
+            }
+            
+            .analytics-values {
+                flex-direction: column;
+                gap: 10px;
+            }
+        }
+
+        /* Ripple effect styles */
+        .ripple {
+            position: absolute;
+            border-radius: 50%;
+            background: rgba(255, 255, 255, 0.6);
+            transform: scale(0);
+            animation: ripple-animation 0.6s linear;
+        }
+        
+        @keyframes ripple-animation {
+            to {
+                transform: scale(4);
+                opacity: 0;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container-fluid py-4">
+        <!-- Header with Animation -->
+        <div class="row mb-4">
+            <div class="col-12 text-center">
+                <h1 class="display-4 mb-2 floating">
+                    <i class="fas fa-bolt me-3"></i>
+                    EV Wireless Charging Dashboard
+                </h1>
+                <p class="lead typewriter">Real-time Monitoring & Control System</p>
+            </div>
+        </div>
+
+        <!-- Vehicle Animation -->
+        <div class="row mb-4" id="vehicle-animation-container" style="display: none;">
+            <div class="col-12">
+                <div class="dashboard-card p-3">
+                    <div class="vehicle-animation">
+                        <i class="fas fa-car car-icon text-warning"></i>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- State Machine -->
+        <div class="row mb-4">
+            <div class="col-12">
+                <div class="dashboard-card p-4">
+                    <h4 class="text-center mb-3">
+                        <i class="fas fa-project-diagram me-2"></i>
+                        Charging Process State Machine
+                    </h4>
+                    <div class="state-machine">
+                        <div class="state-step" id="state-idle">
+                            <i class="fas fa-pause-circle fa-2x mb-2"></i>
+                            <div>IDLE</div>
+                            <small>Waiting</small>
+                        </div>
+                        <div class="state-step" id="state-detected">
+                            <i class="fas fa-car-side fa-2x mb-2"></i>
+                            <div>DETECTED</div>
+                            <small>Vehicle Found</small>
+                        </div>
+                        <div class="state-step" id="state-aligning">
+                            <i class="fas fa-bullseye fa-2x mb-2"></i>
+                            <div>ALIGNING</div>
+                            <small>Positioning</small>
+                        </div>
+                        <div class="state-step" id="state-temp-check">
+                            <i class="fas fa-thermometer-half fa-2x mb-2"></i>
+                            <div>TEMP CHECK</div>
+                            <small>Safety</small>
+                        </div>
+                        <div class="state-step" id="state-charging">
+                            <i class="fas fa-bolt fa-2x mb-2"></i>
+                            <div>CHARGING</div>
+                            <small>Power Transfer</small>
+                        </div>
+                        <div class="state-step" id="state-cooling">
+                            <i class="fas fa-fan fa-2x mb-2"></i>
+                            <div>COOLING</div>
+                            <small>Temperature</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Vehicle Selection -->
+        <div class="row mb-4">
+            <div class="col-12">
+                <div class="dashboard-card p-4">
+                    <h4><i class="fas fa-car me-2"></i>Vehicle Selection</h4>
+                    <div class="vehicle-selection">
+                        <div class="row">
+                            <div class="col-md-6 mb-3">
+                                <label for="vehicle-company" class="form-label">Manufacturer</label>
+                                <select class="form-select" id="vehicle-company">
+                                    <option value="">Select Manufacturer</option>
+                                    <!-- Options will be loaded dynamically -->
+                                </select>
+                            </div>
+                            <div class="col-md-6 mb-3">
+                                <label for="vehicle-model" class="form-label">Model</label>
+                                <select class="form-select" id="vehicle-model" disabled>
+                                    <option value="">Select Model</option>
+                                    <!-- Options will be loaded dynamically -->
+                                </select>
+                            </div>
+                        </div>
+                        <div id="vehicle-info" class="mt-3" style="display: none;">
+                            <div class="row text-center">
+                                <div class="col-4">
+                                    <div class="metric-card">
+                                        <div class="metric-label">Battery Capacity</div>
+                                        <div class="metric-value" id="vehicle-capacity">-- kWh</div>
+                                    </div>
+                                </div>
+                                <div class="col-4">
+                                    <div class="metric-card">
+                                        <div class="metric-label">Range</div>
+                                        <div class="metric-value" id="vehicle-range">-- km</div>
+                                    </div>
+                                </div>
+                                <div class="col-4">
+                                    <div class="metric-card">
+                                        <div class="metric-label">Charging Time</div>
+                                        <div class="metric-value" id="vehicle-charge-time">-- min</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Main Content Grid with Even Layout -->
+        <div class="row row-equal">
+            <!-- Left Column: Vehicle & Battery -->
+            <div class="col-lg-4 mb-4">
+                <!-- Vehicle Detection Card - SMALLER -->
+                <div class="dashboard-card p-3 mb-4 card-equal-height">
+                    <div class="card-content">
+                        <h5><i class="fas fa-car me-2"></i>Vehicle Detection</h5>
+                        <div class="row text-center mt-2">
+                            <div class="col-6">
+                                <div class="metric-card">
+                                    <div class="metric-label">Vehicle Present</div>
+                                    <div class="metric-value" id="vehicle-present">NO</div>
+                                </div>
+                            </div>
+                            <div class="col-6">
+                                <div class="metric-card">
+                                    <div class="metric-label">Alignment</div>
+                                    <div class="metric-value" id="alignment-distance">-- cm</div>
+                                </div>
+                            </div>
+                        </div>
+                        <!-- Vehicle Count as Icon -->
+                        <div class="vehicle-count-icon">
+                            <i class="fas fa-car-side"></i>
+                            <span class="vehicle-count-number" id="vehicle-count">0</span>
+                            <small>Today</small>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Battery Information Card -->
+                <div class="dashboard-card p-4 mb-4 card-equal-height">
+                    <div class="card-content">
+                        <h4><i class="fas fa-battery-half me-2"></i>Battery Status</h4>
+                        <div class="d-flex align-items-center mb-3 mt-3">
+                            <i class="fas fa-battery-half battery-icon" id="battery-icon"></i>
+                            <div class="flex-grow-1">
+                                <div class="progress progress-thick">
+                                    <div id="battery-progress" class="progress-bar" 
+                                         role="progressbar" style="width: 0%">0%</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="row text-center">
+                            <div class="col-6">
+                                <div class="metric-card">
+                                    <div class="metric-label">Voltage</div>
+                                    <div class="metric-value" id="battery-voltage">-- V</div>
+                                </div>
+                            </div>
+                            <div class="col-6">
+                                <div class="metric-card">
+                                    <div class="metric-label">Percentage</div>
+                                    <div class="metric-value" id="battery-percentage">--%</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Center Column: Manual Controls & Temperature -->
+            <div class="col-lg-4 mb-4">
+                <!-- Manual Controls Card - MOVED HERE -->
+                <div class="dashboard-card p-4 mb-4 card-equal-height">
+                    <div class="card-content">
+                        <h4><i class="fas fa-gamepad me-2"></i>Manual Controls</h4>
+                        <div class="mt-3">
+                            <button class="btn btn-success control-btn" id="start-charging">
+                                <i class="fas fa-play me-2"></i>Start Charging
+                            </button>
+                            <button class="btn btn-danger control-btn" id="stop-charging" disabled>
+                                <i class="fas fa-stop me-2"></i>Stop Charging
+                            </button>
+                            <button class="btn btn-warning control-btn" id="force-cooling">
+                                <i class="fas fa-fan me-2"></i>Force Cooling
+                            </button>
+                            <button class="btn btn-info control-btn" id="emergency-stop">
+                                <i class="fas fa-exclamation-triangle me-2"></i>Emergency Stop
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Temperature Monitoring Card - SMALLER -->
+                <div class="dashboard-card p-3 card-equal-height">
+                    <div class="card-content">
+                        <h5 class="text-center mb-2"><i class="fas fa-thermometer-half me-2"></i>Temperature Control</h5>
+                        
+                        <!-- Temperature Gauge Section -->
+                        <div class="temperature-display">
+                            <div class="temperature-gauge">
+                                <div class="gauge-fill" id="temperature-gauge"></div>
+                                <div class="position-absolute top-50 start-50 translate-middle text-center">
+                                    <div class="temperature-value" id="temperature-value">--°C</div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Temperature Status -->
+                        <div class="row text-center mt-2">
+                            <div class="col-6">
+                                <div class="metric-card">
+                                    <div class="metric-label">Cooling</div>
+                                    <div class="metric-value" id="fan-status">OFF</div>
+                                </div>
+                            </div>
+                            <div class="col-6">
+                                <div class="metric-card">
+                                    <div class="metric-label">Status</div>
+                                    <div class="metric-value" id="temp-status">NORMAL</div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Right Column: Analytics & Session History -->
+            <div class="col-lg-4 mb-4">
+                <!-- Charging Analytics Card - PROMINENT with values -->
+                <div class="dashboard-card p-4 mb-4 card-equal-height charging-analytics-card">
+                    <div class="card-content">
+                        <div class="charging-analytics-header">
+                            <h4><i class="fas fa-chart-line me-2"></i>Charging Analytics</h4>
+                            <i class="fas fa-bolt text-warning fa-lg"></i>
+                        </div>
+                        
+                        <div class="chart-container">
+                            <canvas id="voltageChart"></canvas>
+                        </div>
+                        
+                        <!-- Analytics metrics in a prominent position -->
+                        <div class="analytics-values">
+                            <div class="analytics-value-item">
+                                <div class="analytics-value" id="session-time">0m</div>
+                                <div class="analytics-label">Session</div>
+                            </div>
+                            <div class="analytics-value-item">
+                                <div class="analytics-value" id="energy-used">0 kWh</div>
+                                <div class="analytics-label">Energy</div>
+                            </div>
+                            <div class="analytics-value-item">
+                                <div class="analytics-value" id="charge-rate">0 W</div>
+                                <div class="analytics-label">Rate</div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Session History Card -->
+                <div class="dashboard-card p-3 card-equal-height">
+                    <div class="card-content">
+                        <h5><i class="fas fa-history me-2"></i>Recent Sessions</h5>
+                        <div id="session-history" style="max-height: 200px; overflow-y: auto; margin-top: 15px;">
+                            <div class="text-center text-muted py-3">No sessions recorded</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Notification Container -->
+    <div id="notification-container"></div>
+
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+    
+    <script>
+        // Animated Dashboard State Management
+        class AnimatedEVChargingDashboard {
+            constructor() {
+                this.hardwareData = {
+                    vehicle_present: false,
+                    alignment_distance: 0,
+                    temperature: 0,
+                    battery_voltage: 0,
+                    battery_percentage: 0,
+                    charging_status: "IDLE",
+                    fan_status: false,
+                    relay_status: false,
+                    vehicle_count: 0,
+                    last_update: 0
+                };
+
+                this.charts = {};
+                this.sessionStartTime = null;
+                this.updateInterval = null;
+                this.tempData = [];
+                this.voltageData = [];
+                this.maxDataPoints = 20;
+                this.previousValues = {};
+
+                this.stateMapping = {
+                    'IDLE': 'state-idle',
+                    'VEHICLE_DETECTED': 'state-detected',
+                    'ALIGNING': 'state-aligning',
+                    'TEMP_CHECK': 'state-temp-check',
+                    'CHARGING': 'state-charging',
+                    'COOLING': 'state-cooling'
+                };
+
+                // Predefined vehicle data as fallback
+                this.vehicleData = {
+                    "Tata Motors": ["Nexon EV", "Tiago EV", "Tigor EV", "Punch EV"],
+                    "Mahindra": ["XUV400", "eVerito"],
+                    "Hyundai": ["Kona Electric", "Ioniq 5"],
+                    "MG Motors": ["ZS EV", "Comet EV"],
+                    "BYD": ["Atto 3", "E6"],
+                    "BMW": ["i4", "iX1"]
+                };
+
+                this.vehicleInfo = {
+                    "Tata Motors": {
+                        "Nexon EV": {"capacity": 30.2, "range": 325},
+                        "Tiago EV": {"capacity": 24, "range": 250},
+                        "Tigor EV": {"capacity": 26, "range": 280},
+                        "Punch EV": {"capacity": 25, "range": 315}
+                    },
+                    "Mahindra": {
+                        "XUV400": {"capacity": 39.4, "range": 375},
+                        "eVerito": {"capacity": 21.2, "range": 140}
+                    },
+                    "Hyundai": {
+                        "Kona Electric": {"capacity": 39.2, "range": 452},
+                        "Ioniq 5": {"capacity": 72.6, "range": 631}
+                    },
+                    "MG Motors": {
+                        "ZS EV": {"capacity": 50.3, "range": 461},
+                        "Comet EV": {"capacity": 17.3, "range": 230}
+                    },
+                    "BYD": {
+                        "Atto 3": {"capacity": 60.5, "range": 521},
+                        "E6": {"capacity": 71.7, "range": 520}
+                    },
+                    "BMW": {
+                        "i4": {"capacity": 83.9, "range": 590},
+                        "iX1": {"capacity": 64.7, "range": 440}
+                    }
+                };
+
+                this.init();
+            }
+
+            init() {
+                this.initializeCharts();
+                this.setupEventListeners();
+                this.startHardwareMonitoring();
+                this.createParticleEffects();
+                this.loadVehicleData(); // Load vehicle data immediately
+                this.showNotification('🚀 Dashboard initialized successfully!', 'success');
+
+                // Load historical data
+                this.loadChartData();
+                this.loadSessionHistory();
+
+                this.animateCardsSequentially();
+            }
+
+            animateCardsSequentially() {
+                const cards = document.querySelectorAll('.dashboard-card');
+                cards.forEach((card, index) => {
+                    card.style.animationDelay = `${index * 0.1}s`;
+                });
+            }
+
+            createParticleEffects() {
+                document.addEventListener('click', (e) => {
+                    this.createParticles(e.clientX, e.clientY);
+                });
+            }
+
+            createParticles(x, y) {
+                for (let i = 0; i < 8; i++) {
+                    const particle = document.createElement('div');
+                    particle.className = 'particle';
+                    particle.style.left = `${x}px`;
+                    particle.style.top = `${y}px`;
+                    particle.style.setProperty('--tx', `${(Math.random() - 0.5) * 100}px`);
+
+                    document.body.appendChild(particle);
+
+                    particle.style.animation = `particleFloat 1s ease-out forwards`;
+
+                    setTimeout(() => particle.remove(), 1000);
+                }
+            }
+
+            initializeCharts() {
+                const voltageCtx = document.getElementById('voltageChart').getContext('2d');
+                this.charts.voltage = new Chart(voltageCtx, {
+                    type: 'line',
+                    data: {
+                        labels: [],
+                        datasets: [{
+                            label: 'Battery Voltage (V)',
+                            data: [],
+                            borderColor: '#27ae60',
+                            backgroundColor: 'rgba(39, 174, 96, 0.1)',
+                            tension: 0.4,
+                            fill: true,
+                            borderWidth: 2
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: { legend: { display: false } },
+                        animation: {
+                            duration: 1000,
+                            easing: 'easeOutQuart'
+                        },
+                        scales: {
+                            y: {
+                                min: 2.5,
+                                max: 4.5,
+                                grid: { color: 'rgba(255,255,255,0.1)' }
+                            },
+                            x: { display: false }
+                        }
+                    }
+                });
+            }
+
+            setupEventListeners() {
+                document.getElementById('start-charging').addEventListener('click', () => this.startCharging());
+                document.getElementById('stop-charging').addEventListener('click', () => this.stopCharging());
+                document.getElementById('force-cooling').addEventListener('click', () => this.forceCooling());
+                document.getElementById('emergency-stop').addEventListener('click', () => this.emergencyStop());
+
+                // Vehicle selection listeners
+                document.getElementById('vehicle-company').addEventListener('change', (e) => this.loadVehicleModels(e.target.value));
+                document.getElementById('vehicle-model').addEventListener('change', (e) => this.loadVehicleInfo(e.target.value));
+
+                document.querySelectorAll('.control-btn').forEach(btn => {
+                    btn.addEventListener('click', function(e) {
+                        const ripple = document.createElement('span');
+                        const rect = this.getBoundingClientRect();
+                        const size = Math.max(rect.width, rect.height);
+                        const x = e.clientX - rect.left - size / 2;
+                        const y = e.clientY - rect.top - size / 2;
+
+                        ripple.style.width = ripple.style.height = size + 'px';
+                        ripple.style.left = x + 'px';
+                        ripple.style.top = y + 'px';
+                        ripple.classList.add('ripple');
+
+                        this.appendChild(ripple);
+
+                        setTimeout(() => ripple.remove(), 600);
+                    });
+                });
+            }
+
+            async loadVehicleData() {
+                try {
+                    // Try to load from server first
+                    const response = await fetch('/get_vehicle_companies');
+                    if (response.ok) {
+                        const companies = await response.json();
+                        this.populateCompanyDropdown(companies);
+                        console.log('✅ Vehicle companies loaded from server');
+                    } else {
+                        throw new Error('Server not responding');
+                    }
+                } catch (error) {
+                    console.log('⚠️ Using fallback vehicle data:', error.message);
+                    // Use fallback data if server is not available
+                    this.populateCompanyDropdown(Object.keys(this.vehicleData));
+                }
+            }
+
+            populateCompanyDropdown(companies) {
+                const companySelect = document.getElementById('vehicle-company');
+                companySelect.innerHTML = '<option value="">Select Manufacturer</option>';
+                
+                companies.forEach(company => {
+                    const option = document.createElement('option');
+                    option.value = company;
+                    option.textContent = company;
+                    companySelect.appendChild(option);
+                });
+                
+                console.log(`✅ Loaded ${companies.length} manufacturers`);
+            }
+
+            async loadVehicleModels(company) {
+                if (!company) {
+                    this.resetModelDropdown();
+                    return;
+                }
+
+                try {
+                    // Try to load from server first
+                    const response = await fetch('/get_vehicle_models', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ company: company })
+                    });
+                    
+                    if (response.ok) {
+                        const models = await response.json();
+                        this.populateModelDropdown(models, company);
+                    } else {
+                        throw new Error('Server not responding');
+                    }
+                } catch (error) {
+                    console.log('⚠️ Using fallback model data for', company);
+                    // Use fallback data
+                    const models = this.vehicleData[company] || [];
+                    this.populateModelDropdown(models, company);
+                }
+            }
+
+            populateModelDropdown(models, company) {
+                const modelSelect = document.getElementById('vehicle-model');
+                
+                modelSelect.innerHTML = '<option value="">Select Model</option>';
+                modelSelect.disabled = models.length === 0;
+                
+                models.forEach(model => {
+                    const option = document.createElement('option');
+                    option.value = model;
+                    option.textContent = model;
+                    modelSelect.appendChild(option);
+                });
+                
+                console.log(`✅ Loaded ${models.length} models for ${company}`);
+            }
+
+            resetModelDropdown() {
+                const modelSelect = document.getElementById('vehicle-model');
+                modelSelect.innerHTML = '<option value="">Select Model</option>';
+                modelSelect.disabled = true;
+                document.getElementById('vehicle-info').style.display = 'none';
+            }
+
+            async loadVehicleInfo(model) {
+                const company = document.getElementById('vehicle-company').value;
+                
+                if (!company || !model) {
+                    document.getElementById('vehicle-info').style.display = 'none';
+                    return;
+                }
+                
+                try {
+                    // Try to load from server first
+                    const response = await fetch('/get_vehicle_info', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ company: company, model: model })
+                    });
+                    
+                    let info;
+                    if (response.ok) {
+                        info = await response.json();
+                    } else {
+                        // Use fallback data
+                        info = this.vehicleInfo[company]?.[model] || {};
+                    }
+                    
+                    this.displayVehicleInfo(info, company, model);
+                    
+                } catch (error) {
+                    console.error('❌ Error loading vehicle info:', error);
+                    // Use fallback data
+                    const info = this.vehicleInfo[company]?.[model] || {};
+                    this.displayVehicleInfo(info, company, model);
+                }
+            }
+
+            displayVehicleInfo(info, company, model) {
+                const infoDiv = document.getElementById('vehicle-info');
+                
+                if (info && info.capacity) {
+                    document.getElementById('vehicle-capacity').textContent = `${info.capacity} kWh`;
+                    document.getElementById('vehicle-range').textContent = `${info.range} km`;
+                    
+                    // Calculate estimated charging time (simplified)
+                    const currentBattery = this.hardwareData.battery_percentage || 0;
+                    const chargeNeeded = (100 - currentBattery) / 100;
+                    const chargeTime = Math.round(info.capacity * chargeNeeded * 6); // 6 minutes per kWh
+                    document.getElementById('vehicle-charge-time').textContent = `${chargeTime} min`;
+                    
+                    infoDiv.style.display = 'block';
+                    this.showNotification(`🚗 ${company} ${model} selected - ${info.capacity}kWh battery`, 'success');
+                } else {
+                    infoDiv.style.display = 'none';
+                    this.showNotification(`⚠️ No detailed info available for ${model}`, 'warning');
+                }
+            }
+
+            async startHardwareMonitoring() {
+                await this.updateHardwareData();
+                this.updateInterval = setInterval(() => this.updateHardwareData(), 2000);
+            }
+
+            async updateHardwareData() {
+                try {
+                    const response = await fetch('/get_hardware_data');
+                    const data = await response.json();
+
+                    this.animateValueChanges(data);
+                    this.hardwareData = data;
+                    this.updateDashboard(data);
+                    this.updateCharts(data);
+                    this.updateStateMachine(data.charging_status);
+                    this.updateVehicleAnimation(data.vehicle_present);
+
+                } catch (error) {
+                    console.error('❌ Error updating hardware data:', error);
+                    this.showNotification('🔌 Failed to connect to hardware', 'danger');
+                }
+            }
+
+            animateValueChanges(newData) {
+                const fields = ['battery_percentage', 'battery_voltage', 'temperature', 'alignment_distance'];
+
+                fields.forEach(field => {
+                    const newValue = newData[field];
+                    const oldValue = this.previousValues[field];
+
+                    if (oldValue !== undefined && newValue !== oldValue) {
+                        const element = document.getElementById(field.replace('_', '-'));
+                        if (element) {
+                            element.classList.add('changing');
+                            setTimeout(() => element.classList.remove('changing'), 600);
+                        }
+                    }
+
+                    this.previousValues[field] = newValue;
+                });
+            }
+
+            updateDashboard(data) {
+                // Vehicle Detection
+                const vehiclePresent = document.getElementById('vehicle-present');
+                const wasPresent = vehiclePresent.textContent === 'YES';
+                const isPresent = data.vehicle_present;
+
+                if (wasPresent !== isPresent) {
+                    vehiclePresent.textContent = isPresent ? 'YES' : 'NO';
+                    vehiclePresent.style.color = isPresent ? '#27ae60' : '#e74c3c';
+
+                    if (isPresent) {
+                        this.showNotification('🚗 Vehicle detected!', 'success');
+                    }
+                }
+
+                document.getElementById('alignment-distance').textContent = `${data.alignment_distance} cm`;
+                document.getElementById('vehicle-count').textContent = data.vehicle_count;
+
+                // Battery Status
+                const batteryPct = data.battery_percentage;
+                document.getElementById('battery-percentage').textContent = `${batteryPct}%`;
+                document.getElementById('battery-voltage').textContent = `${data.battery_voltage} V`;
+
+                const progressBar = document.getElementById('battery-progress');
+                const batteryIcon = document.getElementById('battery-icon');
+
+                progressBar.style.width = `${batteryPct}%`;
+                progressBar.textContent = `${batteryPct}%`;
+
+                if (data.relay_status && batteryPct < 100) {
+                    progressBar.classList.add('charging');
+                    batteryIcon.classList.add('charging');
+                } else {
+                    progressBar.classList.remove('charging');
+                    batteryIcon.classList.remove('charging');
+                }
+
+                if (batteryPct >= 80) {
+                    progressBar.className = 'progress-bar progress-thick bg-success';
+                } else if (batteryPct >= 40) {
+                    progressBar.className = 'progress-bar progress-thick bg-warning';
+                } else {
+                    progressBar.className = 'progress-bar progress-thick bg-danger';
+                }
+
+                // Temperature Display
+                const tempValue = document.getElementById('temperature-value');
+                tempValue.textContent = `${data.temperature}°C`;
+
+                // Update temperature gauge rotation
+                const tempGauge = document.getElementById('temperature-gauge');
+                const rotation = Math.min((data.temperature / 80) * 360, 360);
+                tempGauge.style.transform = `rotate(${rotation}deg)`;
+
+                // Temperature status with color coding
+                const tempStatus = document.getElementById('temp-status');
+                let statusText = 'NORMAL';
+                let statusClass = 'temp-normal';
+
+                if (data.temperature > 68) {
+                    statusText = 'HIGH';
+                    statusClass = 'temp-danger';
+                } else if (data.temperature > 50) {
+                    statusText = 'WARNING';
+                    statusClass = 'temp-warning';
+                }
+
+                tempStatus.textContent = statusText;
+                tempStatus.className = `metric-value ${statusClass}`;
+
+                // Fan status
+                const fanStatus = document.getElementById('fan-status');
+                fanStatus.textContent = data.fan_status ? 'ON' : 'OFF';
+
+                if (data.fan_status) {
+                    tempGauge.classList.add('cooling-active');
+                    fanStatus.style.color = '#00ffff';
+                } else {
+                    tempGauge.classList.remove('cooling-active');
+                    fanStatus.style.color = '#e74c3c';
+                }
+
+                // Control buttons
+                document.getElementById('start-charging').disabled = data.data_stale || data.relay_status;
+                document.getElementById('stop-charging').disabled = !data.relay_status;
+                
+                // Update analytics values
+                this.updateSessionMetrics();
+            }
+
+            updateCharts(data) {
+                const now = new Date().toLocaleTimeString();
+
+                this.voltageData.push(data.battery_voltage);
+                if (this.voltageData.length > this.maxDataPoints) this.voltageData.shift();
+
+                this.charts.voltage.data.labels = Array(this.voltageData.length).fill('');
+                this.charts.voltage.data.datasets[0].data = this.voltageData;
+                this.charts.voltage.update();
+            }
+
+            updateStateMachine(state) {
+                Object.values(this.stateMapping).forEach(stateId => {
+                    const element = document.getElementById(stateId);
+                    element.classList.remove('active', 'warning', 'danger');
+                });
+
+                const activeState = this.stateMapping[state];
+                if (activeState) {
+                    const element = document.getElementById(activeState);
+                    setTimeout(() => {
+                        element.classList.add('active');
+
+                        if (state === 'COOLING') {
+                            element.classList.add('warning');
+                        } else if (state === 'TEMP_CHECK' && this.hardwareData.temperature > 70) {
+                            element.classList.add('danger');
+                        }
+                    }, 100);
+                }
+
+                if (state !== this.previousState) {
+                    this.showNotification(`🔄 System state changed to: ${state}`, 'info');
+                    this.previousState = state;
+                }
+            }
+
+            updateVehicleAnimation(vehiclePresent) {
+                const container = document.getElementById('vehicle-animation-container');
+                if (vehiclePresent) {
+                    container.style.display = 'block';
+                    container.classList.add('animate__fadeIn');
+                } else {
+                    container.classList.add('animate__fadeOut');
+                    setTimeout(() => {
+                        container.style.display = 'none';
+                        container.classList.remove('animate__fadeOut');
+                    }, 500);
+                }
+            }
+
+            async startCharging() {
+                try {
+                    const response = await fetch('/control_charger', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ command: 'start' })
+                    });
+
+                    if (response.ok) {
+                        this.showNotification('⚡ Charging started successfully!', 'success');
+                        this.sessionStartTime = new Date();
+                        this.celebrate();
+                    } else {
+                        this.showNotification('❌ Failed to start charging', 'danger');
+                    }
+                } catch (error) {
+                    this.showNotification('💥 Error starting charging: ' + error.message, 'danger');
+                }
+            }
+
+            async stopCharging() {
+                try {
+                    const response = await fetch('/control_charger', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ command: 'stop' })
+                    });
+
+                    if (response.ok) {
+                        this.showNotification('🛑 Charging stopped', 'warning');
+                        this.sessionStartTime = null;
+                        setTimeout(() => this.loadSessionHistory(), 1000);
+                    }
+                } catch (error) {
+                    this.showNotification('💥 Error stopping charging: ' + error.message, 'danger');
+                }
+            }
+
+            async forceCooling() {
+                try {
+                    const response = await fetch('/control_charger', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ command: 'force_cooling' })
+                    });
+
+                    if (response.ok) {
+                        this.showNotification('❄️ Manual cooling activated', 'warning');
+                    }
+                } catch (error) {
+                    this.showNotification('💥 Error activating cooling: ' + error.message, 'danger');
+                }
+            }
+
+            async emergencyStop() {
+                try {
+                    await this.stopCharging();
+                    this.showNotification('🚨 EMERGENCY STOP ACTIVATED!', 'danger');
+                    setTimeout(() => this.loadSessionHistory(), 1000);
+
+                    document.body.style.animation = 'shake 0.5s ease';
+                    setTimeout(() => document.body.style.animation = '', 500);
+
+                } catch (error) {
+                    this.showNotification('💥 Emergency stop failed: ' + error.message, 'danger');
+                }
+            }
+
+            celebrate() {
+                for (let i = 0; i < 20; i++) {
+                    setTimeout(() => {
+                        this.createParticles(
+                            Math.random() * window.innerWidth,
+                            Math.random() * window.innerHeight
+                        );
+                    }, i * 100);
+                }
+            }
+
+            showNotification(message, type = 'info') {
+                const container = document.getElementById('notification-container');
+                const notification = document.createElement('div');
+                notification.className = `notification ${type}`;
+                notification.innerHTML = `
+                    <div class="d-flex justify-content-between align-items-center">
+                        <span>${message}</span>
+                        <button class="btn btn-sm btn-light" onclick="this.parentElement.parentElement.remove()">
+                            <i class="fas fa-times"></i>
+                        </button>
+                    </div>
+                `;
+
+                container.appendChild(notification);
+
+                setTimeout(() => notification.classList.add('show'), 100);
+
+                setTimeout(() => {
+                    notification.classList.remove('show');
+                    setTimeout(() => notification.remove(), 600);
+                }, 5000);
+            }
+
+            updateSessionMetrics() {
+                if (this.sessionStartTime) {
+                    const now = new Date();
+                    const diff = Math.floor((now - this.sessionStartTime) / 1000 / 60);
+                    document.getElementById('session-time').textContent = `${diff}m`;
+
+                    const energy = (diff * 0.1).toFixed(2);
+                    document.getElementById('energy-used').textContent = `${energy} kWh`;
+
+                    const rate = (this.hardwareData.battery_voltage * 10).toFixed(0);
+                    document.getElementById('charge-rate').textContent = `${rate} W`;
+                }
+            }
+
+            async loadChartData() {
+                try {
+                    const response = await fetch('/get_chart_data');
+                    const data = await response.json();
+
+                    this.charts.voltage.data.labels = data.timestamps;
+                    this.charts.voltage.data.datasets[0].data = data.voltage_history;
+
+                    this.charts.voltage.update();
+
+                    console.log('📊 Chart data loaded successfully');
+                } catch (error) {
+                    console.error('Error loading chart data:', error);
+                }
+            }
+
+            async loadSessionHistory() {
+                try {
+                    const response = await fetch('/get_session_history');
+                    const data = await response.json();
+                    this.updateSessionHistoryUI(data.sessions);
+                    console.log('📈 Session history loaded');
+                } catch (error) {
+                    console.error('Error loading session history:', error);
+                }
+            }
+
+            updateSessionHistoryUI(sessions) {
+                const container = document.getElementById('session-history');
+
+                if (sessions.length === 0) {
+                    container.innerHTML = '<div class="text-center text-muted py-3">No sessions recorded</div>';
+                    return;
+                }
+
+                container.innerHTML = sessions.map(session => `
+                    <div class="session-item mb-2 p-2 border rounded animate__animated animate__fadeIn">
+                        <small>
+                            <i class="fas fa-bolt text-warning me-1"></i>
+                            ${session.start_time} | ${session.duration}min | ${session.energy}kWh
+                            <br>
+                            <span class="text-info">Battery: ${session.end_battery}%</span>
+                        </small>
+                    </div>
+                `).reverse().join('');
+            }
+        }
+
+        // Initialize dashboard when page loads
+        document.addEventListener('DOMContentLoaded', function() {
+            window.dashboard = new AnimatedEVChargingDashboard();
+
+            // Update session metrics every minute
+            setInterval(() => {
+                if (window.dashboard) {
+                    window.dashboard.updateSessionMetrics();
+                }
+            }, 60000);
+        });
+    </script>
+</body>
+</html>
